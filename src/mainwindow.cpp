@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 #include "scopeworker.h"
+#include "imagecanvas.h"
 #include <QApplication>
 #include <QCheckBox>
 #include <QClipboard>
@@ -8,6 +9,8 @@
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFrame>
@@ -19,6 +22,7 @@
 #include <QMessageBox>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSaveFile>
@@ -34,54 +38,6 @@
 #include <QUrl>
 #include <QUuid>
 #include <QVBoxLayout>
-
-class ImageCanvas : public QWidget {
-public:
-    explicit ImageCanvas(QWidget *parent = nullptr) : QWidget(parent) {
-        setObjectName("imageCanvas");
-        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    }
-    void setImage(const QImage &image) { image_ = image; updateSize(); update(); }
-    void setActual(bool actual) { actual_ = actual; updateSize(); update(); }
-protected:
-    void paintEvent(QPaintEvent *) override {
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing);
-        p.fillRect(rect(), QColor("#eef2f7"));
-        if (!image_.isNull()) {
-            QSize size = image_.size();
-            if (!actual_) size.scale((this->size() - QSize(40, 40)).expandedTo(QSize(1, 1)), Qt::KeepAspectRatio);
-            QRect dest(QPoint((width()-size.width())/2, (height()-size.height())/2), size);
-            p.setRenderHint(QPainter::SmoothPixmapTransform, !actual_);
-            p.fillRect(dest.adjusted(-1,-1,1,1), QColor("#cdd6e3"));
-            p.drawImage(dest, image_);
-            return;
-        }
-        const QPoint center(width()/2, height()/2 - 35);
-        p.setPen(QPen(QColor("#b4c3d8"), 2));
-        p.setBrush(QColor("#f8faff"));
-        p.drawRoundedRect(QRect(center.x()-46,center.y()-39,92,65), 9, 9);
-        QPainterPath path;
-        path.moveTo(center.x()-33, center.y()-3);
-        path.lineTo(center.x()-19, center.y()-3);
-        path.lineTo(center.x()-10, center.y()-21);
-        path.lineTo(center.x()+2, center.y()+12);
-        path.lineTo(center.x()+13, center.y()-10);
-        path.lineTo(center.x()+32, center.y()-10);
-        p.setPen(QPen(QColor("#4385e6"), 3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        p.drawPath(path);
-        p.setPen(QColor("#35455c"));
-        QFont font = p.font(); font.setPointSize(15); font.setBold(true); p.setFont(font);
-        p.drawText(QRect(0,center.y()+49,width(),34),Qt::AlignCenter,QStringLiteral("把示波器屏幕留在电脑上"));
-        font.setPointSize(10);font.setBold(false);p.setFont(font);p.setPen(QColor("#7d8b9e"));
-        p.drawText(QRect(15,center.y()+89,width()-30,50),Qt::AlignHCenter | Qt::AlignTop,
-                   QStringLiteral("连接设备后点击「截图」\n暂时没有设备？选择左侧「离线演示」体验操作。"));
-    }
-private:
-    void updateSize() { setMinimumSize(actual_ && !image_.isNull() ? image_.size()+QSize(40,40) : QSize(0,0)); }
-    QImage image_;
-    bool actual_ = false;
-};
 
 static QLabel *caption(const QString &text) {
     auto *label = new QLabel(text); label->setObjectName("caption"); return label;
@@ -206,23 +162,42 @@ void MainWindow::buildUi() {
     connect(open,&QPushButton::clicked,this,[this]{const auto dir=outputDirectory();if(!QDir(dir).exists()){showMessage(QStringLiteral("目录尚未创建，首次保存截图时会自动创建。"));return;}QDesktopServices::openUrl(QUrl::fromLocalFile(dir));});
     left->addWidget(caption(QStringLiteral("文件名前缀 / 工况")));
     prefix_ = new QLineEdit(settings.value("prefix","SDS3054X_HD").toString());prefix_->setObjectName("filenamePrefix");prefix_->setPlaceholderText(QStringLiteral("例如：电机启动_24V"));left->addWidget(prefix_);
-    autoSave_ = new QCheckBox(QStringLiteral("截图后自动保存"));autoSave_->setChecked(settings.value("autoSave",true).toBool());autoSave_->setObjectName("autoSave");left->addWidget(autoSave_);
+    autoSave_ = new QCheckBox(QStringLiteral("截图后自动保存原图"));autoSave_->setChecked(settings.value("autoSave",true).toBool());autoSave_->setObjectName("autoSave");left->addWidget(autoSave_);
     auto *nameHint = new QLabel(QStringLiteral("文件名自动附加时间，保留每次截图。"));nameHint->setObjectName("hint");nameHint->setWordWrap(true);left->addWidget(nameHint);left->addStretch();
     auto *sidebarScroll = new QScrollArea;sidebarScroll->setWidget(sidebar);sidebarScroll->setWidgetResizable(true);sidebarScroll->setFixedWidth(298);sidebarScroll->setFrameShape(QFrame::NoFrame);sidebarScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);body->addWidget(sidebarScroll);
 
     auto *right = new QVBoxLayout;right->setSpacing(12);
     auto *previewCard = new QFrame;previewCard->setObjectName("card");auto *previewLayout = new QVBoxLayout(previewCard);previewLayout->setContentsMargins(0,0,0,0);previewLayout->setSpacing(0);
     auto *previewBar = new QHBoxLayout;previewBar->setContentsMargins(18,12,14,12);auto *previewTitle = new QLabel(QStringLiteral("屏幕预览"));previewTitle->setObjectName("sectionTitle");previewBar->addWidget(previewTitle);previewBar->addStretch();
-    auto *fit = new QPushButton(QStringLiteral("适应窗口"));auto *actual = new QPushButton("100%");fit->setObjectName("quiet");actual->setObjectName("quiet");previewBar->addWidget(fit);previewBar->addWidget(actual);previewLayout->addLayout(previewBar);
-    auto *scroll = new QScrollArea;scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);canvas_=new ImageCanvas;scroll->setWidget(canvas_);previewLayout->addWidget(scroll,1);
+    auto *fit = new QPushButton(QStringLiteral("适应窗口"));auto *actual = new QPushButton("100%");fit->setObjectName("fitImageButton");actual->setObjectName("actualImageButton");previewBar->addWidget(fit);previewBar->addWidget(actual);previewLayout->addLayout(previewBar);
+    auto *annotationBar = new QHBoxLayout;annotationBar->setSpacing(6);annotationBar->setContentsMargins(14,0,14,10);
+    addTextButton_=new QPushButton(QStringLiteral("＋ 文字"));addTextButton_->setObjectName("addTextButton");addTextButton_->setCheckable(true);annotationBar->addWidget(addTextButton_);
+    editTextButton_=new QPushButton(QStringLiteral("编辑"));editTextButton_->setObjectName("editTextButton");annotationBar->addWidget(editTextButton_);
+    deleteTextButton_=new QPushButton(QStringLiteral("删除"));deleteTextButton_->setObjectName("deleteTextButton");annotationBar->addWidget(deleteTextButton_);
+    undoTextButton_=new QPushButton(QStringLiteral("撤销"));undoTextButton_->setObjectName("undoTextButton");annotationBar->addWidget(undoTextButton_);
+    clearTextButton_=new QPushButton(QStringLiteral("清空"));clearTextButton_->setObjectName("clearTextButton");annotationBar->addWidget(clearTextButton_);
+    annotationBar->addStretch();previewLayout->addLayout(annotationBar);
+    auto *scroll = new QScrollArea;scroll->setObjectName("previewScrollArea");scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);canvas_=new ImageCanvas;scroll->setWidget(canvas_);previewLayout->addWidget(scroll,1);
     connect(fit,&QPushButton::clicked,this,[this]{canvas_->setActual(false);});connect(actual,&QPushButton::clicked,this,[this]{canvas_->setActual(true);});
+    connect(addTextButton_,&QPushButton::toggled,this,[this](bool enabled){canvas_->setAddMode(enabled);updateAnnotationActions();});
+    connect(canvas_,&ImageCanvas::addRequested,this,[this](const QPointF &position){editAnnotation(position);});
+    connect(canvas_,&ImageCanvas::editRequested,this,[this](int index){editAnnotation({},index);});
+    connect(editTextButton_,&QPushButton::clicked,this,[this]{editAnnotation({},canvas_->selectedIndex());});
+    connect(deleteTextButton_,&QPushButton::clicked,canvas_,&ImageCanvas::deleteSelected);
+    connect(undoTextButton_,&QPushButton::clicked,canvas_,&ImageCanvas::undo);
+    connect(clearTextButton_,&QPushButton::clicked,canvas_,&ImageCanvas::clearAnnotations);
+    connect(canvas_,&ImageCanvas::annotationsChanged,this,&MainWindow::updateAnnotationActions);
+    connect(canvas_,&ImageCanvas::selectionChanged,this,&MainWindow::updateAnnotationActions);
     auto *imageFooter = new QHBoxLayout;imageFooter->setContentsMargins(18,10,18,10);
     imageInfo_ = new QLabel(QStringLiteral("尚无截图"));imageInfo_->setObjectName("hint");imageFooter->addWidget(imageInfo_);imageFooter->addStretch();previewLayout->addLayout(imageFooter);right->addWidget(previewCard,1);
+    annotationStatus_=new QLabel(QStringLiteral("截图后可点击「＋ 文字」添加标注"));annotationStatus_->setObjectName("annotationStatus");annotationStatus_->setWordWrap(true);right->addWidget(annotationStatus_);
     auto *actions = new QHBoxLayout;actions->setSpacing(10);
     captureButton_=new QPushButton(QStringLiteral("截图  F5"));captureButton_->setObjectName("captureButton");captureButton_->setMinimumHeight(43);actions->addWidget(captureButton_,2);
+    saveAnnotationsButton_=new QPushButton(QStringLiteral("保存标注"));saveAnnotationsButton_->setObjectName("saveAnnotationsButton");saveAnnotationsButton_->setMinimumHeight(43);actions->addWidget(saveAnnotationsButton_,1);
     saveButton_=new QPushButton(QStringLiteral("另存为…"));saveButton_->setObjectName("saveButton");saveButton_->setMinimumHeight(43);actions->addWidget(saveButton_,1);
     copyButton_=new QPushButton(QStringLiteral("复制图片"));copyButton_->setObjectName("copyButton");copyButton_->setMinimumHeight(43);actions->addWidget(copyButton_,1);right->addLayout(actions);
     connect(captureButton_,&QPushButton::clicked,this,&MainWindow::capture);connect(saveButton_,&QPushButton::clicked,this,[this]{saveImage(true);});connect(copyButton_,&QPushButton::clicked,this,&MainWindow::copyImage);
+    connect(saveAnnotationsButton_,&QPushButton::clicked,this,[this]{saveImage(false);});
     auto *recentLabel = new QLabel(QStringLiteral("本次保存"));recentLabel->setObjectName("caption");right->addWidget(recentLabel);
     history_ = new QListWidget;history_->setObjectName("historyList");history_->setFixedHeight(77);history_->setIconSize(QSize(78,48));history_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);history_->setToolTip(QStringLiteral("双击打开保存的图片"));right->addWidget(history_);
     connect(history_,&QListWidget::itemDoubleClicked,this,[](QListWidgetItem *item){QDesktopServices::openUrl(QUrl::fromLocalFile(item->data(Qt::UserRole).toString()));});
@@ -243,6 +218,7 @@ void MainWindow::buildUi() {
         QPushButton { background:white;border:1px solid #d7e0ec;border-radius:7px;padding:8px 12px;font-weight:500; }
         QPushButton:hover { border-color:#8ab0ec;background:#f2f7ff; }
         QPushButton:pressed { background:#e5efff; }
+        QPushButton:checked { background:#e4efff;color:#155cc8;border-color:#73a3ed; }
         QPushButton:disabled { color:#aab4c2;background:#f4f6f9;border-color:#e5eaf0; }
         QPushButton#captureButton { background:#2468db;color:white;border-color:#2468db;font-size:14px;font-weight:600; }
         QPushButton#captureButton:hover { background:#1a59c2; }
@@ -251,7 +227,7 @@ void MainWindow::buildUi() {
         QPushButton#connectButton:disabled { color:#aab4c2;background:#f4f6f9;border-color:#e5eaf0; }
         QPushButton#quiet { border:none;background:transparent;color:#687e9b;padding:6px 10px; }
         QPushButton#quiet:hover { background:#edf3fc; }
-        QLineEdit,QComboBox,QSpinBox { background:#fff;border:1px solid #d9e1eb;border-radius:6px;padding:7px 8px;min-height:18px;selection-background-color:#2468db; }
+        QLineEdit,QComboBox,QSpinBox,QPlainTextEdit { background:#fff;border:1px solid #d9e1eb;border-radius:6px;padding:7px 8px;min-height:18px;selection-background-color:#2468db; }
         QLineEdit:focus,QComboBox:focus,QSpinBox:focus { border-color:#5d94ed; }
         QLineEdit:disabled,QComboBox:disabled,QSpinBox:disabled { background:#f7f8fa;color:#9ca8b7; }
         QComboBox::drop-down { border:none;width:24px; }
@@ -295,6 +271,7 @@ void MainWindow::toggleConnection() {
 }
 void MainWindow::capture() {
     if(busy_ || !connected_)return;
+    if(!confirmDiscardAnnotations())return;
     setBusy(true,demo_ ? QStringLiteral("正在生成演示图…") : QStringLiteral("正在读取示波器屏幕…"));
     QMetaObject::invokeMethod(worker_,&ScopeWorker::capture,Qt::QueuedConnection);
 }
@@ -309,6 +286,7 @@ void MainWindow::updateActions() {
     connectButton_->setEnabled(!busy_&&(connected_||ready));connectButton_->setText(connected_?QStringLiteral("断开连接"):(mode_->currentIndex()==2?QStringLiteral("开始演示"):QStringLiteral("连接设备")));
     captureButton_->setEnabled(!busy_&&connected_);captureButton_->setText(busy_ ? QStringLiteral("处理中…") : QStringLiteral("截图  F5"));
     saveButton_->setEnabled(!busy_&&!image_.isNull());copyButton_->setEnabled(!image_.isNull());
+    updateAnnotationActions();
 }
 void MainWindow::showMessage(const QString &message,bool error) {
     message_->setText(message);message_->setStyleSheet(error?"color:#b5433f;":"color:#6d7d92;");
@@ -326,24 +304,83 @@ QString MainWindow::suggestedFilename() const {
     QString prefix=prefix_->text().trimmed();prefix.replace(QRegularExpression("[<>:\"/\\\\|?*\\x00-\\x1f]"),"_");
     prefix=prefix.left(70);while(prefix.endsWith('.')||prefix.endsWith(' '))prefix.chop(1);
     if(prefix.isEmpty())prefix="SDS3054X_HD";
-    return (imageDemo_?QStringLiteral("演示_"):QString())+prefix+"_"+QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz")+"_"+QUuid::createUuid().toString(QUuid::Id128).left(4)+".png";
+    return (imageDemo_?QStringLiteral("演示_"):QString())+prefix+(canvas_->annotations().isEmpty()?QStringLiteral("_"):QStringLiteral("_标注_"))+QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss_zzz")+"_"+QUuid::createUuid().toString(QUuid::Id128).left(4)+".png";
 }
-void MainWindow::saveImage(bool choosePath) {
-    if(image_.isNull())return;
+bool MainWindow::saveImage(bool choosePath) {
+    if(image_.isNull())return false;
+    const QImage exported = canvas_->renderedImage();
     QString path=QDir(outputDirectory()).filePath(suggestedFilename());
     if(choosePath) {
         path=QFileDialog::getSaveFileName(this,QStringLiteral("保存示波器截图"),path,QStringLiteral("PNG 图片 (*.png)"));
-        if(path.isEmpty())return;if(!path.endsWith(".png",Qt::CaseInsensitive))path+=".png";
+        if(path.isEmpty())return false;if(!path.endsWith(".png",Qt::CaseInsensitive))path+=".png";
     }
-    if(!QDir().mkpath(QFileInfo(path).absolutePath())){showMessage(QStringLiteral("无法创建保存目录，请选择有写入权限的文件夹。"),true);return;}
+    if(!QDir().mkpath(QFileInfo(path).absolutePath())){showMessage(QStringLiteral("无法创建保存目录，请选择有写入权限的文件夹。"),true);return false;}
     QSaveFile file(path);
-    if(!file.open(QIODevice::WriteOnly)||!image_.save(&file,"PNG")||!file.commit()) {showMessage(QStringLiteral("图片保存失败：%1").arg(file.errorString()),true);return;}
-    auto *item=new QListWidgetItem(QIcon(QPixmap::fromImage(image_.scaled(78,48,Qt::KeepAspectRatio,Qt::SmoothTransformation))),QFileInfo(path).fileName());
+    if(!file.open(QIODevice::WriteOnly)||!exported.save(&file,"PNG")||!file.commit()) {showMessage(QStringLiteral("图片保存失败：%1").arg(file.errorString()),true);return false;}
+    auto *item=new QListWidgetItem(QIcon(QPixmap::fromImage(exported.scaled(78,48,Qt::KeepAspectRatio,Qt::SmoothTransformation))),QFileInfo(path).fileName());
     item->setData(Qt::UserRole,path);item->setToolTip(path);history_->insertItem(0,item);while(history_->count()>100)delete history_->takeItem(history_->count()-1);
     showMessage(QStringLiteral("已保存：%1").arg(QDir::toNativeSeparators(path)));
+    canvas_->markSaved();return true;
 }
 void MainWindow::copyImage() {
-    if(image_.isNull())return;QApplication::clipboard()->setImage(image_);showMessage(QStringLiteral("图片已复制，可以粘贴到微信、Word 或报告中。"));
+    if(image_.isNull())return;QApplication::clipboard()->setImage(canvas_->renderedImage());showMessage(QStringLiteral("图片及标注已复制，可以粘贴到微信、Word 或报告中。"));
+}
+
+void MainWindow::updateAnnotationActions() {
+    if(!annotationStatus_)return;
+    const bool available=!busy_&&!image_.isNull();
+    canvas_->setEnabled(!busy_);
+    addTextButton_->setEnabled(available);
+    addTextButton_->setChecked(canvas_->addMode());
+    editTextButton_->setEnabled(available&&canvas_->selectedIndex()>=0);
+    deleteTextButton_->setEnabled(available&&canvas_->selectedIndex()>=0);
+    undoTextButton_->setEnabled(available&&canvas_->canUndo());
+    clearTextButton_->setEnabled(available&&!canvas_->annotations().isEmpty());
+    saveAnnotationsButton_->setEnabled(available&&(!canvas_->annotations().isEmpty()||canvas_->hasUnsavedChanges()));
+    if(image_.isNull())annotationStatus_->setText(QStringLiteral("截图后可点击「＋ 文字」添加标注"));
+    else if(canvas_->addMode())annotationStatus_->setText(QStringLiteral("点击图片选择文字位置 · Esc 取消"));
+    else if(canvas_->hasUnsavedChanges())annotationStatus_->setText(QStringLiteral("标注未保存 · 拖动移动，双击编辑；点击「保存标注」另存新图"));
+    else if(!canvas_->annotations().isEmpty())annotationStatus_->setText(QStringLiteral("标注已保存 · 拖动移动，双击编辑，Delete 删除，Ctrl+Z 撤销"));
+    else annotationStatus_->setText(QStringLiteral("点击「＋ 文字」后在图上放置 · 保存和复制会包含文字标注"));
+    annotationStatus_->setStyleSheet(canvas_->hasUnsavedChanges()?"color:#ab650d;font-size:11px;":"color:#78879b;font-size:11px;");
+}
+
+void MainWindow::editAnnotation(const QPointF &position,int index) {
+    if(busy_||image_.isNull()||index>=canvas_->annotations().size())return;
+    const bool editing=index>=0;
+    QDialog dialog(this);dialog.setObjectName("annotationDialog");dialog.setWindowTitle(editing?QStringLiteral("编辑文字标注"):QStringLiteral("添加文字标注"));dialog.resize(440,300);
+    auto *layout=new QVBoxLayout(&dialog);
+    layout->addWidget(new QLabel(QStringLiteral("输入文字（支持中文和换行）")));
+    auto *text=new QPlainTextEdit; text->setObjectName("annotationText");text->setPlaceholderText(QStringLiteral("例如：启动电流峰值\n24 V · 空载"));layout->addWidget(text,1);
+    auto *style=new QHBoxLayout;style->addWidget(new QLabel(QStringLiteral("字号（像素）")));
+    auto *size=new QSpinBox;size->setObjectName("annotationSize");size->setRange(10,120);size->setValue(editing?canvas_->annotations()[index].pixelSize:annotationSize_);style->addWidget(size);
+    style->addWidget(new QLabel(QStringLiteral("颜色")));auto *color=new QComboBox;color->setObjectName("annotationColor");
+    const QList<QPair<QString,QColor>> colors={{QStringLiteral("黄色"),QColor("#ffd43b")},{QStringLiteral("红色"),QColor("#ff6464")},{QStringLiteral("白色"),QColor("#ffffff")},{QStringLiteral("青色"),QColor("#35e6f2")},{QStringLiteral("绿色"),QColor("#65f18d")},{QStringLiteral("黑色"),QColor("#151a22")}};
+    const QColor current=editing?canvas_->annotations()[index].color:annotationColor_;
+    for(const auto &entry:colors){QPixmap icon(14,14);icon.fill(entry.second);color->addItem(QIcon(icon),entry.first,entry.second);if(entry.second==current)color->setCurrentIndex(color->count()-1);}
+    style->addWidget(color);layout->addLayout(style);
+    auto *error=new QLabel;error->setWordWrap(true);error->setStyleSheet("color:#b5433f");layout->addWidget(error);
+    auto *buttons=new QDialogButtonBox(QDialogButtonBox::Ok|QDialogButtonBox::Cancel);buttons->button(QDialogButtonBox::Ok)->setText(QStringLiteral("确定"));buttons->button(QDialogButtonBox::Cancel)->setText(QStringLiteral("取消"));layout->addWidget(buttons);
+    if(editing)text->setPlainText(canvas_->annotations()[index].text);
+    connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+    connect(buttons,&QDialogButtonBox::accepted,&dialog,[&]{
+        const auto value=text->toPlainText();const auto selectedColor=color->currentData().value<QColor>();
+        if(value.trimmed().isEmpty()){error->setText(QStringLiteral("请输入要标注的文字。"));return;}
+        const bool ok=editing?canvas_->editText(index,value,size->value(),selectedColor):canvas_->addText(value,position,size->value(),selectedColor);
+        if(!ok){error->setText(QStringLiteral("文字过长或超出图片尺寸，请减少字数、换行或减小字号（最多1000字）。"));return;}
+        annotationSize_=size->value();annotationColor_=selectedColor;dialog.accept();
+    });
+    text->setFocus();dialog.exec();canvas_->setFocus();updateAnnotationActions();
+}
+
+bool MainWindow::confirmDiscardAnnotations() {
+    if(!canvas_->hasUnsavedChanges())return true;
+    QMessageBox box(QMessageBox::Question,QStringLiteral("保存文字标注"),QStringLiteral("当前文字标注有尚未保存的修改。是否先保存一张新图片？"),QMessageBox::Save|QMessageBox::Discard|QMessageBox::Cancel,this);
+    box.setObjectName("unsavedAnnotationsDialog");box.setDefaultButton(QMessageBox::Save);
+    box.button(QMessageBox::Save)->setText(QStringLiteral("保存并继续"));box.button(QMessageBox::Discard)->setText(QStringLiteral("放弃修改"));box.button(QMessageBox::Cancel)->setText(QStringLiteral("取消"));
+    const auto answer=box.exec();
+    if(answer==QMessageBox::Save)return saveImage(false);
+    return answer==QMessageBox::Discard;
 }
 void MainWindow::about() {
     QMessageBox box(this);box.setWindowTitle(QStringLiteral("关于 ScopeSnap"));
@@ -358,5 +395,6 @@ void MainWindow::about() {
 }
 void MainWindow::closeEvent(QCloseEvent *event) {
     if(busy_) { closeRequested_=true;centralWidget()->setEnabled(false);showMessage(QStringLiteral("等待当前通信结束后关闭…"));event->ignore();return; }
+    if(!confirmDiscardAnnotations()){closeRequested_=false;centralWidget()->setEnabled(true);event->ignore();return;}
     event->accept();
 }

@@ -31,7 +31,7 @@ $driverInstaller = Join-Path $driverRoot 'ni-visa_26.8_online.exe'
 if (!(Test-Path -LiteralPath $driverInstaller)) { throw '缺少NI官方在线安装器，暂不生成含驱动入口的分发包。' }
 if ((Get-FileHash -LiteralPath $driverInstaller).Hash -ne '00E3A6FE2D9609972983F44812FD33B468935480F82D6A98F27D4DD590B58E0F') { throw 'NI安装器SHA-256不符' }
 if ((Get-AuthenticodeSignature -LiteralPath $driverInstaller).Status -ne 'Valid') { throw 'NI安装器签名无效' }
-$version = '0.1.0'
+$version = '0.2.0'
 $packageName = "ScopeSnap-$version-Windows11-x64"
 $distRoot = Join-Path $projectRoot 'dist'
 $packageRoot = Join-Path $distRoot $packageName

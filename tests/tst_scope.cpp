@@ -1,7 +1,19 @@
 #include "scopeworker.h"
 #include "mainwindow.h"
+#include "imagecanvas.h"
 
 #include <QBuffer>
+#include <QClipboard>
+#include <QComboBox>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFileDialog>
+#include <QMessageBox>
+#include <QMouseEvent>
+#include <QPlainTextEdit>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QSpinBox>
 #include <QHostAddress>
 #include <QPainter>
 #include <QCheckBox>
@@ -112,6 +124,7 @@ public:
     }
 
     quint16 port() const { return server.serverPort(); }
+    void setMode(Mode value) { mode=value; }
     QList<QByteArray> commands;
 
 private:
@@ -149,6 +162,7 @@ class ScopeTests : public QObject
 private slots:
     void initTestCase()
     {
+        QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
         QVERIFY(settingsDirectory.isValid());
         QCoreApplication::setOrganizationName(QStringLiteral("ScopeSnapOfflineTests"));
         QCoreApplication::setApplicationName(QStringLiteral("ScopeSnapOfflineTests"));
@@ -286,6 +300,201 @@ private slots:
         QCOMPARE(connected.count(), 0);
         QCOMPARE(errors.count(), 1);
         QCOMPARE(server.commands, QList<QByteArray>({"*IDN?"}));
+    }
+
+    void annotationCoordinates_data()
+    {
+        QTest::addColumn<int>("mode");
+        QTest::newRow("fit-with-margins") << 0;
+        QTest::newRow("actual-size") << 1;
+        QTest::newRow("actual-scrolled") << 2;
+    }
+
+    void annotationCoordinates()
+    {
+        QFETCH(int,mode);
+        QScrollArea scroll;
+        scroll.resize(630,420);scroll.setWidgetResizable(true);
+        auto *canvas=new ImageCanvas;scroll.setWidget(canvas);
+        QImage source(1200,800,QImage::Format_RGB32);source.fill(QColor("#202838"));
+        canvas->setImage(source);canvas->setActual(mode!=0);scroll.show();
+        QTest::qWait(20);
+        if(mode==2){scroll.horizontalScrollBar()->setValue(250);scroll.verticalScrollBar()->setValue(170);}
+        const QPointF position=mode==2?QPointF(430,330):QPointF(170,130);
+        QSignalSpy placed(canvas,&ImageCanvas::addRequested);
+        connect(canvas,&ImageCanvas::addRequested,canvas,[canvas](const QPointF &point){canvas->addText(QStringLiteral("峰值\n24 V"),point,24,Qt::yellow);});
+        canvas->setAddMode(true);
+        QTest::mouseClick(canvas,Qt::LeftButton,Qt::NoModifier,QPoint(3,3));
+        QCOMPARE(placed.count(),0);
+        const auto viewportPoint=canvas->mapTo(scroll.viewport(),canvas->imageToWidget(position).toPoint());
+        QVERIFY(scroll.viewport()->rect().contains(viewportPoint));
+        const auto localPoint=canvas->mapFrom(scroll.viewport(),viewportPoint);
+        QTest::mouseClick(canvas,Qt::LeftButton,Qt::NoModifier,localPoint);
+        QCOMPARE(placed.count(),1);QCOMPARE(canvas->annotations().size(),1);
+        const auto actual=canvas->annotations()[0].position;
+        QVERIFY(qAbs(actual.x()-position.x())<2.5);QVERIFY(qAbs(actual.y()-position.y())<2.5);
+        const auto result=canvas->renderedImage().convertToFormat(QImage::Format_RGB32);
+        QCOMPARE(result.size(),source.size());QVERIFY(result!=source);
+        QRect changed;
+        for(int y=0;y<source.height();++y)for(int x=0;x<source.width();++x)
+            if(source.pixel(x,y)!=result.pixel(x,y))changed=changed.united(QRect(x,y,1,1));
+        QVERIFY(!changed.isEmpty());QVERIFY(canvas->annotationBounds(0).adjusted(-1,-1,1,1).contains(QRectF(changed)));
+        QCOMPARE(canvas->sourceImage(),source);
+        canvas->setActual(mode==0);
+        QCOMPARE(canvas->renderedImage().convertToFormat(QImage::Format_RGB32),result);
+    }
+
+    void annotationDragEditUndoAndBounds()
+    {
+        ImageCanvas canvas;canvas.resize(800,500);
+        QImage source(1200,800,QImage::Format_RGB32);source.fill(QColor("#202838"));
+        canvas.setImage(source);canvas.show();
+        QVERIFY(canvas.addText(QStringLiteral("启动"),{100,100},28,Qt::yellow));
+        const auto first=canvas.renderedImage();
+        canvas.markSaved();QVERIFY(!canvas.hasUnsavedChanges());
+        const auto press=canvas.imageToWidget(canvas.annotationBounds(0).center());
+        const QPointF delta(90,55);
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,press.toPoint());
+        QMouseEvent move(QEvent::MouseMove,press+delta,canvas.mapToGlobal((press+delta).toPoint()),Qt::NoButton,Qt::LeftButton,Qt::NoModifier);
+        QApplication::sendEvent(&canvas,&move);
+        QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,(press+delta).toPoint());
+        const auto moved=canvas.annotations()[0].position;
+        const auto rect=canvas.imageRect();
+        QVERIFY(qAbs(moved.x()-100-delta.x()*1200/rect.width())<3);
+        QVERIFY(qAbs(moved.y()-100-delta.y()*800/rect.height())<3);
+        QVERIFY(canvas.hasUnsavedChanges());
+        canvas.undo();QCOMPARE(canvas.renderedImage(),first);QVERIFY(!canvas.hasUnsavedChanges());
+        QTest::mousePress(&canvas,Qt::LeftButton,Qt::NoModifier,press.toPoint());
+        QMouseEvent outward(QEvent::MouseMove,press+delta,canvas.mapToGlobal((press+delta).toPoint()),Qt::NoButton,Qt::LeftButton,Qt::NoModifier);
+        QApplication::sendEvent(&canvas,&outward);
+        QMouseEvent back(QEvent::MouseMove,QPointF(press.toPoint()),canvas.mapToGlobal(press.toPoint()),Qt::NoButton,Qt::LeftButton,Qt::NoModifier);
+        QApplication::sendEvent(&canvas,&back);QTest::mouseRelease(&canvas,Qt::LeftButton,Qt::NoModifier,press.toPoint());
+        QCOMPARE(canvas.renderedImage(),first);QVERIFY(!canvas.hasUnsavedChanges());
+        QVERIFY(canvas.editText(0,QStringLiteral("峰值 18 A\n24 V"),32,Qt::cyan));
+        QVERIFY(canvas.renderedImage()!=first);
+        QTest::mouseClick(&canvas,Qt::LeftButton,Qt::NoModifier,canvas.imageToWidget(canvas.annotationBounds(0).center()).toPoint());
+        QTest::keyClick(&canvas,Qt::Key_Delete);
+        QCOMPARE(canvas.renderedImage(),source);
+        canvas.undo();QCOMPARE(canvas.annotations().size(),1);
+        QVERIFY(canvas.addText(QStringLiteral("右下角"),{1199,799},35,Qt::white));
+        QVERIFY(QRectF(source.rect()).contains(canvas.annotationBounds(1)));
+        QVERIFY(!canvas.addText(QString(1001,'X'),{0,0},28,Qt::yellow));
+        canvas.clearAnnotations();QCOMPARE(canvas.renderedImage(),source);
+        canvas.setImage(source);QVERIFY(!canvas.hasUnsavedChanges());QVERIFY(!canvas.canUndo());QCOMPARE(canvas.selectedIndex(),-1);
+    }
+
+    void annotationExportPreservesOriginal()
+    {
+        QTemporaryDir output;QVERIFY(output.isValid());
+        MainWindow window(true);window.show();
+        auto *canvas=window.findChild<ImageCanvas*>();
+        auto *capture=window.findChild<QPushButton*>("captureButton");
+        auto *history=window.findChild<QListWidget*>("historyList");
+        window.findChild<QLineEdit*>("outputDirectory")->setText(output.path());
+        window.findChild<QCheckBox*>("autoSave")->setChecked(true);
+        QTRY_VERIFY_WITH_TIMEOUT(capture->isEnabled(),5000);capture->click();
+        QTRY_COMPARE_WITH_TIMEOUT(history->count(),1,5000);
+        QTRY_VERIFY_WITH_TIMEOUT(canvas->isEnabled(),5000);
+        const QString originalPath=history->item(0)->data(Qt::UserRole).toString();
+        QFile original(originalPath);QVERIFY(original.open(QIODevice::ReadOnly));const auto originalBytes=original.readAll();original.close();
+        const auto originalImage=canvas->sourceImage();
+        QVERIFY(canvas->addText(QStringLiteral("峰值 18 A\n24 V · 空载"),{220,140},32,Qt::yellow));
+        const auto artifactDirectory=qEnvironmentVariable("SCOPESNAP_TEST_ARTIFACT_DIR");
+        if(!artifactDirectory.isEmpty()) {
+            QVERIFY(QDir().mkpath(artifactDirectory));
+            window.findChild<QLineEdit*>("outputDirectory")->setText("C:/Screenshots");
+            QApplication::processEvents();
+            QVERIFY(window.grab().save(artifactDirectory+"/annotation-ui.png"));
+            QVERIFY(canvas->renderedImage().save(artifactDirectory+"/annotation-export.png"));
+            window.resize(940,680);QApplication::processEvents();
+            QVERIFY(window.grab().save(artifactDirectory+"/annotation-ui-small.png"));
+            window.findChild<QLineEdit*>("outputDirectory")->setText(output.path());
+        }
+        window.findChild<QPushButton*>("copyButton")->click();
+        const auto copied=QApplication::clipboard()->image().convertToFormat(QImage::Format_ARGB32);
+        QVERIFY(copied!=originalImage.convertToFormat(QImage::Format_ARGB32));QVERIFY(canvas->hasUnsavedChanges());
+        window.findChild<QPushButton*>("saveAnnotationsButton")->click();
+        QCOMPARE(history->count(),2);QVERIFY(!canvas->hasUnsavedChanges());
+        const auto markedPath=history->item(0)->data(Qt::UserRole).toString();
+        QVERIFY(markedPath.contains(QStringLiteral("_标注_")));QVERIFY(markedPath!=originalPath);
+        QCOMPARE(QImage(markedPath).convertToFormat(QImage::Format_ARGB32),copied);
+        QVERIFY(original.open(QIODevice::ReadOnly));QCOMPARE(original.readAll(),originalBytes);
+        QCOMPARE(canvas->sourceImage(),originalImage);
+        QTimer::singleShot(0,&window,[&]{
+            auto *dialog=window.findChild<QFileDialog*>();QVERIFY(dialog);dialog->selectFile(output.filePath("chosen.png"));
+            QMetaObject::invokeMethod(dialog,"accept",Qt::DirectConnection);
+        });
+        window.findChild<QPushButton*>("saveButton")->click();
+        QCOMPARE(QImage(output.filePath("chosen.png")).convertToFormat(QImage::Format_ARGB32),copied);
+        capture->click();QVERIFY(!canvas->isEnabled());
+        QTRY_VERIFY_WITH_TIMEOUT(canvas->isEnabled(),5000);
+        QCOMPARE(canvas->annotations().size(),0);QVERIFY(!canvas->hasUnsavedChanges());
+    }
+
+    void annotationDialogCancelAndProtection()
+    {
+        QTemporaryDir output;QVERIFY(output.isValid());
+        MainWindow window(true);window.show();
+        auto *capture=window.findChild<QPushButton*>("captureButton");
+        auto *canvas=window.findChild<ImageCanvas*>();
+        auto *directory=window.findChild<QLineEdit*>("outputDirectory");directory->setText(output.path());
+        window.findChild<QCheckBox*>("autoSave")->setChecked(false);
+        QTRY_VERIFY_WITH_TIMEOUT(capture->isEnabled(),5000);capture->click();
+        QTRY_VERIFY_WITH_TIMEOUT(!canvas->sourceImage().isNull()&&canvas->isEnabled(),5000);
+        auto *add=window.findChild<QPushButton*>("addTextButton");add->click();
+        const QPoint point=canvas->imageToWidget({300,180}).toPoint();
+        QTimer::singleShot(0,&window,[&]{auto *dialog=window.findChild<QDialog*>("annotationDialog");QVERIFY(dialog);dialog->findChild<QPlainTextEdit*>()->setPlainText(QStringLiteral("取消这段"));dialog->reject();});
+        QTest::mouseClick(canvas,Qt::LeftButton,Qt::NoModifier,point);
+        QVERIFY(canvas->annotations().isEmpty());QVERIFY(!canvas->hasUnsavedChanges());
+        QTimer::singleShot(0,&window,[&]{auto *dialog=window.findChild<QDialog*>("annotationDialog");QVERIFY(dialog);dialog->findChild<QPlainTextEdit*>()->setPlainText(QStringLiteral("启动峰值"));dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();});
+        QTest::mouseClick(canvas,Qt::LeftButton,Qt::NoModifier,point);
+        QCOMPARE(canvas->annotations().size(),1);QVERIFY(!add->isChecked());
+        const auto before=canvas->renderedImage();
+        QTimer::singleShot(0,&window,[&]{auto *dialog=window.findChild<QDialog*>("annotationDialog");QVERIFY(dialog);QCOMPARE(dialog->findChild<QPlainTextEdit*>()->toPlainText(),QStringLiteral("启动峰值"));dialog->findChild<QPlainTextEdit*>()->setPlainText(QStringLiteral("取消修改"));dialog->reject();});
+        QTest::mouseDClick(canvas,Qt::LeftButton,Qt::NoModifier,canvas->imageToWidget(canvas->annotationBounds(0).center()).toPoint());
+        QCOMPARE(canvas->renderedImage(),before);
+        QTimer::singleShot(0,&window,[&]{auto *dialog=window.findChild<QFileDialog*>();QVERIFY(dialog);dialog->reject();});
+        window.findChild<QPushButton*>("saveButton")->click();QVERIFY(canvas->hasUnsavedChanges());
+        auto answer=[&](QMessageBox::StandardButton button){QTimer::singleShot(0,&window,[&,button]{auto *box=window.findChild<QMessageBox*>("unsavedAnnotationsDialog");QVERIFY(box);box->button(button)->click();});};
+        answer(QMessageBox::Cancel);capture->click();QCOMPARE(canvas->renderedImage(),before);QVERIFY(capture->isEnabled());
+        answer(QMessageBox::Cancel);QVERIFY(!window.close());QVERIFY(window.centralWidget()->isEnabled());
+        QFile blocker(output.filePath("blocker"));QVERIFY(blocker.open(QIODevice::WriteOnly));blocker.write("fixture");blocker.close();
+        directory->setText(blocker.fileName());
+        answer(QMessageBox::Save);capture->click();QVERIFY(canvas->hasUnsavedChanges());QCOMPARE(canvas->renderedImage(),before);QVERIFY(capture->isEnabled());
+        directory->setText(output.path());answer(QMessageBox::Discard);capture->click();
+        QTRY_VERIFY_WITH_TIMEOUT(canvas->isEnabled(),5000);QVERIFY(canvas->annotations().isEmpty());
+    }
+
+    void annotationCaptureFailureAndDelayedClose()
+    {
+        FakeScpiServer server;
+        MainWindow window(true);window.show();
+        auto *capture=window.findChild<QPushButton*>("captureButton");
+        auto *connection=window.findChild<QPushButton*>("connectButton");
+        auto *canvas=window.findChild<ImageCanvas*>();
+        auto *mode=window.findChild<QComboBox*>("connectionMode");
+        QVERIFY(mode);
+        window.findChild<QCheckBox*>("autoSave")->setChecked(false);
+        QTRY_VERIFY_WITH_TIMEOUT(capture->isEnabled(),5000);connection->click();
+        QTRY_VERIFY_WITH_TIMEOUT(mode->isEnabled(),5000);
+        mode->setCurrentIndex(1);window.findChild<QLineEdit*>("hostAddress")->setText("127.0.0.1");
+        window.findChild<QSpinBox*>("networkPort")->setValue(server.port());connection->click();
+        QTRY_VERIFY_WITH_TIMEOUT(capture->isEnabled(),5000);capture->click();
+        QTRY_VERIFY_WITH_TIMEOUT(!canvas->sourceImage().isNull()&&canvas->isEnabled(),5000);
+        QVERIFY(canvas->addText(QStringLiteral("异常前"),{30,35},22,Qt::yellow));
+        const auto before=canvas->renderedImage();server.setMode(FakeScpiServer::TruncatedImage);
+        QTimer::singleShot(0,&window,[&]{auto *box=window.findChild<QMessageBox*>("unsavedAnnotationsDialog");QVERIFY(box);box->button(QMessageBox::Discard)->click();});
+        capture->click();QVERIFY(!canvas->isEnabled());QVERIFY(!window.close());QVERIFY(!window.centralWidget()->isEnabled());
+        bool cancelled=false;QTimer answer;answer.setInterval(10);
+        connect(&answer,&QTimer::timeout,&window,[&]{
+            if(auto *box=window.findChild<QMessageBox*>("unsavedAnnotationsDialog")){cancelled=true;box->button(QMessageBox::Cancel)->click();answer.stop();}
+        });answer.start();
+        QTRY_VERIFY_WITH_TIMEOUT(cancelled,5000);
+        QVERIFY(window.centralWidget()->isEnabled());QVERIFY(window.isVisible());
+        QCOMPARE(canvas->renderedImage(),before);QVERIFY(canvas->hasUnsavedChanges());
+        QVERIFY(window.findChild<QPushButton*>("saveAnnotationsButton")->isEnabled());
+        mode->setCurrentIndex(2);connection->click();
+        QTRY_VERIFY_WITH_TIMEOUT(capture->isEnabled(),5000);QVERIFY(window.isVisible());
     }
 
     void uiDemoCaptureSavesAndDisconnects()
