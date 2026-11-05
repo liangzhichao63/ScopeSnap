@@ -53,11 +53,20 @@ New-Item -ItemType Directory -Path (Join-Path $packageRoot 'drivers') -Force | O
 Get-ChildItem -LiteralPath $driverRoot -File | Where-Object { $_.Name -eq 'ni-visa_26.8_online.exe' -or $_.Extension -in @('.txt','.md','.pdf','.rtf') } | ForEach-Object {
     Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $packageRoot 'drivers')
 }
-foreach ($name in @('README.md','LICENSE','使用说明.md')) {
+Copy-Item -LiteralPath (Join-Path $projectRoot '便携包说明.md') -Destination (Join-Path $packageRoot 'README.md')
+foreach ($name in @('LICENSE','使用说明.md')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot $name) -Destination $packageRoot
 }
-foreach ($name in @('src','tests','resources','CMakeLists.txt','构建.ps1','README.md','LICENSE','使用说明.md','.gitignore')) {
+foreach ($name in @('src','tests','resources','CMakeLists.txt','构建.ps1','README.md','LICENSE','使用说明.md','便携包说明.md','.gitignore','.gitattributes')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot $name) -Destination (Join-Path $packageRoot '源码\ScopeSnap') -Recurse
+}
+foreach ($group in @('drivers','qt-source')) {
+    $sourceMetadata = Join-Path $projectRoot "third_party\$group"
+    $targetMetadata = Join-Path $packageRoot "源码\ScopeSnap\third_party\$group"
+    New-Item -ItemType Directory -Path $targetMetadata -Force | Out-Null
+    Get-ChildItem -LiteralPath $sourceMetadata -File | Where-Object { $_.Extension -in @('.md','.txt','.pdf','.rtf','.sha256','.json') } | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination $targetMetadata
+    }
 }
 Copy-Item -LiteralPath $qtSource -Destination (Join-Path $packageRoot '源码\Qt\qtbase-everywhere-src-6.5.3.tar.xz')
 Get-ChildItem -LiteralPath (Split-Path $qtSource) -File | Where-Object { $_.Extension -in @('.md','.txt','.sha256','.json') } | ForEach-Object {

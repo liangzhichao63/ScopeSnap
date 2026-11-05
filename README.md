@@ -20,6 +20,8 @@
 
 ## 使用
 
+从 [GitHub Release 下载 Windows 11 x64 便携包](https://github.com/liangzhichao63/ScopeSnap/releases/tag/v0.1.0)，选择附件 `ScopeSnap-0.1.0-Windows11-x64.zip`。包内包含运行库、使用说明、源码、许可证和 NI-VISA 官方在线安装器；安装驱动时需要联网。
+
 已有完整 Windows 便携包时，解压全部文件并运行 `ScopeSnap.exe`，保留同目录 DLL、`platforms`、许可证及配套源码。GitHub 的 **Download ZIP 是源码归档**，不包含可直接运行的 EXE。
 
 1. **USB**：按供应商说明安装 VISA，用数据线连接示波器背面的 USB Device 方口；选择“USB 数据线”，刷新并连接设备。
