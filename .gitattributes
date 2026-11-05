@@ -1,0 +1,5 @@
+* text=auto
+
+# Preserve upstream license documents and their published checksums byte for byte.
+resources/licenses/** -text
+third_party/** -text

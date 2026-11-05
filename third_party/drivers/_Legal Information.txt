@@ -1,0 +1,19 @@
+﻿Legal Information Readme
+
+This file describes the location of end-user license agreements (EULAs) and third-party legal notices.
+
+- Notices are located in the "<National Instruments>\_Legal Information" and <National Instruments> directories.
+
+- EULAs are located in the <National Instruments>\Shared\MDF\Legal\license directory.
+
+If you distribute an Authorized Application with applicable NI runtime engines and driver interface software, you must ensure that the appropriate notices are installed on your end users' machines.
+
+If your distribution invokes NI installers directly, the NI installers install the appropriate notices.
+
+If you build a distribution using the installer-building tools in NI LabVIEW, NI LabWindows™/CVI™, NI Measurement Studio, NI Package Builder, or NI TestStand software, the resulting installer is designed to install the appropriate notices for the NI components that you include in the installer. We strongly recommend you verify that all the appropriate notices get installed.
+
+If you install NI components some other way, such as building an installer with Microsoft Visual Studio® software that installs NI Measurement Studio merge modules, you need to ensure that the appropriate notices are installed in a place where they are likely to be found by the user.
+
+© 2005-2025 National Instruments Corporation. All rights reserved.
+
+CVI, LabVIEW, National Instruments, NI, ni.com, Engineer Ambitiously, the National Instruments corporate logo, and the Eagle logo are trademarks of National Instruments Corporation. Refer to the Trademark Information at ni.com/trademarks for other National Instruments trademarks. The mark LabWindows is used under a license from Microsoft Corporation. Other product and company names mentioned herein are trademarks or trade names of their respective companies.

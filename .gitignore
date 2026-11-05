@@ -1,0 +1,12 @@
+/build*/
+/dist/
+/验证输出/
+/MEMORY.md
+.env
+.env.*
+*.pem
+*.key
+*.user
+/third_party/qt-source/*.tar.xz
+/third_party/qt-source/*.part*
+/third_party/drivers/*.exe
